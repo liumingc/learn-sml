@@ -1,17 +1,32 @@
-let addC tS tT cset =
-  if tS = tT then cset else (tS, tT)::cset
+let rec addC tS tT cset =
+  if tS = tT then cset
+  else
+    (
+    match (tS, tT) with
+    | (TyId s, _) ->
+        (match findC tS cset with
+         | Some tS' ->
+            addC tS' tT cset
+         | None ->
+            (tS, tT)::cset
+        )
+    | (_, TyId t) ->
+        addC tT tS cset
+    | _ ->
+        (tS, tT)::cset
+    )
+and findC tS cset =
+  match cset with
+    [] -> None
+  | (tS1,tT1)::rest ->
+      if tS = tS1 then Some tT1
+      else findC tS rest
 
 let printC cset =
   print_endline "--- beg constraint set ---";
   List.iter (fun (tyX, tyY) -> printty tyX; print_string " = "; printty tyY; print_newline ()) cset;
   print_endline "--- end constraint set ---"
 
-let rec findC tS cset =
-  match cset with
-    [] -> None
-  | (tS1,tT1)::rest ->
-      if tS = tS1 then Some tT1
-      else findC tS rest
 
 let tCnt = ref 0
 let genNewT () =
@@ -26,8 +41,7 @@ let rec typeofIntern ctx t =
   | TmAbs(fi,x,tyT1,t2) ->
       let ctx' = addbinding ctx x (VarBind(tyT1)) in
       let tyT2, c1 = typeofIntern ctx' t2 in
-      let tyX = TyArr (tyT2, genNewT ()) in
-      (TyArr(tyT1, tyT2), (addC tyT1 tyX c1))
+      (TyArr(tyT1, tyT2), c1)
   | TmApp(fi,t1,t2) ->
       let tyT1, c1 = typeofIntern ctx t1 in
       let tyT2, c2 = typeofIntern ctx t2 in
@@ -64,29 +78,33 @@ let rec occurs tyS tyT =
         occurs tyS ty1 || occurs tyS ty2
     | _ -> false
 
+let substC subst cset =
+    List.map (fun (tyX, tyY) -> (subst tyX, subst tyY)) cset
+
 (* ConstraintSet -> subst -> subst *)
 let rec unify c subst =
   match c with
     [] -> subst
   | (TyId s as tyS, tyT)::rest ->
-      if tyS = tyT then subst
+      if tyS = tyT then unify rest subst
+      else if occurs tyS tyT then
+        (printty tyS; print_string " and "; printty tyT; err " cycle")
       else
-        let sigma x =
-          if x = tyS then tyT
-          else if occurs tyS tyT then
-            (printty tyS; print_string " and "; printty tyT; err " cycle")
-          else subst x
+        let rec sigma tyX =
+            let tyX' = subst tyX in
+            match subst tyX' with
+            | TyId x ->
+                if x = s then subst tyT
+                else tyX'
+            | TyArr (tyT1, tyT2) ->
+                TyArr (sigma tyT1, sigma tyT2)
+            | _ -> tyX'
         in
-          fun x -> applySubst sigma (unify rest subst x)
+          (* unify (substC sigma rest) sigma *)
+          unify rest sigma
   | (tyS, (TyId t as tyT))::rest ->
-      let sigma x =
-        if x = tyT then tyS
-        else if occurs tyT tyS then
-          (printty tyS; print_string " and "; printty tyT; err " cycle")
-        else subst x
-      in
-        fun x -> applySubst sigma (unify rest subst x)
-  | (TyArr (tyT11, tyT12), TyArr (tyT21, tyT22)):: rest ->
+        unify ((tyT, tyS)::rest) subst
+  | (TyArr (tyT11, tyT12), TyArr (tyT21, tyT22))::rest ->
       unify ((tyT11, tyT21)::(tyT12, tyT22)::rest) subst
   | (TyBool, TyBool)::rest ->
       unify rest subst
@@ -99,14 +117,6 @@ let rec unify c subst =
         printty tyT;
         err " cannot unify"
       )
-and applySubst subst ty =
-  match ty with
-    TyBool -> TyBool
-  | TyNat -> TyNat
-  | TyId s as tyS ->
-      subst tyS
-  | TyArr (tyS, tyT) ->
-      TyArr (subst tyS, subst tyT)
 
 let rec typeof ctx t =
   let ty, c = typeofIntern ctx t in
@@ -114,7 +124,7 @@ let rec typeof ctx t =
     printty ty;
     print_string " => \n";
     let subst = unify c (fun x -> x) in
-    let ans = applySubst subst ty in
+    let ans = subst ty in
     printty ans;
     print_newline ();
     ans
